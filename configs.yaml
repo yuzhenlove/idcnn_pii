@@ -17,6 +17,6 @@ model:
 train:
   epochs: 30
   batch_size: 64
-  max_len: 256
+  max_len: 512
   lr: 0.001
   early_stop_patience: 5
