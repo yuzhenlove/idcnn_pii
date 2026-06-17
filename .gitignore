@@ -1,0 +1,31 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+
+# Local data. Raw PII data should not be committed.
+data/**
+!data/**/
+!data/**/.gitkeep
+
+# Training logs and generated artifacts.
+logs/**
+!logs/**/
+!logs/**/.gitkeep
+
+outputs/**
+!outputs/**/
+!outputs/**/.gitkeep
+
+# Model/checkpoint artifacts in case they are written outside ignored dirs.
+*.pt
+*.pth
+*.ckpt
+
+# Local archives and temporary files.
+*.zip
+*.tar
+*.tar.gz
+*.tmp
+*.log

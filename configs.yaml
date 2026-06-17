@@ -1,0 +1,22 @@
+data:
+  raw_path: data/raw/pii.json
+  processed_dir: data/processed
+  train_path: data/processed/train.jsonl
+  dev_path: data/processed/dev.jsonl
+  test_path: data/processed/test.jsonl
+  char2id_path: data/processed/char2id.json
+  label2id_path: data/processed/label2id.json
+
+model:
+  embedding_dim: 128
+  hidden_size: 128
+  dropout: 0.3
+  dilations: [1, 2, 4, 8, 1]
+  kernel_size: 3
+
+train:
+  epochs: 30
+  batch_size: 64
+  max_len: 256
+  lr: 0.001
+  early_stop_patience: 5
