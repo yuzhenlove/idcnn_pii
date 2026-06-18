@@ -98,5 +98,5 @@ class IDCNNForTokenClassification(nn.Module):
         block_features = self.encoder(input_ids, mask, return_all_blocks=True)
         block_outputs = [self.head(features, labels, mask) for features in block_features]
         final_output = block_outputs[-1]
-        final_output["loss"] = torch.stack([output["loss"] for output in block_outputs]).mean()
+        final_output["loss"] = torch.stack([output["loss"] for output in block_outputs]).sum()
         return final_output

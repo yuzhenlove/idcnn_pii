@@ -129,7 +129,7 @@ class FeatureMeanHead(nn.Module):
 
 
 class IDCNNForTokenClassificationTest(unittest.TestCase):
-    def test_training_averages_losses_and_returns_last_block_logits(self):
+    def test_training_sums_losses_and_returns_last_block_logits(self):
         head = FeatureMeanHead()
         model = IDCNNForTokenClassification(FixedBlockEncoder(), head)
         input_ids = torch.ones(1, 2, dtype=torch.long)
@@ -138,7 +138,7 @@ class IDCNNForTokenClassificationTest(unittest.TestCase):
         output = model(input_ids, labels, input_ids.ne(0))
 
         self.assertEqual(head.calls, 3)
-        self.assertEqual(output["loss"].item(), 3.0)
+        self.assertEqual(output["loss"].item(), 9.0)
         self.assertTrue(torch.equal(output["logits"], torch.full((1, 2, 1), 5.0)))
 
     def test_prediction_uses_only_last_block(self):
