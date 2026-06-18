@@ -50,7 +50,12 @@ class IDCNNEncoder(nn.Module):
             nn.init.dirac_(layer.weight)
             nn.init.zeros_(layer.bias)
 
-    def forward(self, input_ids: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        mask: torch.Tensor | None = None,
+        return_all_blocks: bool = False,
+    ) -> torch.Tensor | list[torch.Tensor]:
         x = self.embedding(input_ids)
         token_mask = mask.unsqueeze(-1).to(dtype=x.dtype) if mask is not None else None
         if token_mask is not None:
@@ -61,15 +66,17 @@ class IDCNNEncoder(nn.Module):
         x = self.activation(self.initial_conv(x))
         if conv_mask is not None:
             x = x * conv_mask
+        block_features = []
         for _ in range(self.num_blocks):
             for layer in self.layers:
                 x = self.activation(layer(x))
                 if conv_mask is not None:
                     x = x * conv_mask
-        x = self.hidden_dropout(x.transpose(1, 2))
-        if token_mask is not None:
-            x = x * token_mask
-        return x
+            features = self.hidden_dropout(x.transpose(1, 2))
+            if token_mask is not None:
+                features = features * token_mask
+            block_features.append(features)
+        return block_features if return_all_blocks else block_features[-1]
 
 
 class IDCNNForTokenClassification(nn.Module):
@@ -84,5 +91,12 @@ class IDCNNForTokenClassification(nn.Module):
         labels: torch.Tensor | None = None,
         mask: torch.Tensor | None = None,
     ):
-        features = self.encoder(input_ids, mask)
-        return self.head(features, labels, mask)
+        if labels is None:
+            features = self.encoder(input_ids, mask)
+            return self.head(features, None, mask)
+
+        block_features = self.encoder(input_ids, mask, return_all_blocks=True)
+        block_outputs = [self.head(features, labels, mask) for features in block_features]
+        final_output = block_outputs[-1]
+        final_output["loss"] = torch.stack([output["loss"] for output in block_outputs]).mean()
+        return final_output
