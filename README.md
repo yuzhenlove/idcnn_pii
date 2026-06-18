@@ -6,6 +6,8 @@
 - `crf`: IDCNN + CRF 结构化解码
 - `egp`: IDCNN + Efficient GlobalPointer span 预测
 
+IDCNN 编码器保留中文字符级输入：每个字符使用 100 维可训练 embedding，不加载作者的英文预训练词向量，也不使用 shape 特征。初始卷积将 100 维字符特征映射为 300 维隐藏特征，重复 block 的 dilation 配置为 `[1, 2, 1]`。
+
 ## 仓库缺少什么
 
 GitHub 版本只保留代码和目录结构，不上传实验数据和生成产物。
@@ -84,11 +86,15 @@ uv run python scripts/plot_results.py
 
 默认训练参数来自 `configs.yaml`：
 
-- `epochs=30`
-- `batch_size=64`
-- `max_len=256`
-- `lr=0.001`
-- `early_stop_patience=5`
+- `epochs=100`
+- `batch_size=128`
+- `max_len=512`
+- `lr=0.0005`
+- `Adam beta1=0.9, beta2=0.9, epsilon=1e-6`
+- `input_dropout=0.35, hidden_dropout=0.15`
+- `token_dropout=0.15`
+- `grad_clip=5.0`
+- `early_stop_patience=100`
 
 如果机器较慢，可以先跑 CPU smoke test：
 

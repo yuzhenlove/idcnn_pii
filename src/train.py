@@ -11,7 +11,7 @@ from data import PIIDataset, make_collate_fn, load_vocabs
 from evaluate import compute_metrics, labels_to_entities
 from heads import CRFHead, EfficientGlobalPointerHead, SoftmaxHead
 from model_idcnn import IDCNNEncoder, IDCNNForTokenClassification
-from utils import ensure_dirs, load_yaml, make_logger, set_seed, write_json, write_jsonl
+from utils import UNK_TOKEN, ensure_dirs, load_yaml, make_logger, set_seed, write_json, write_jsonl
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,8 +22,10 @@ def build_model(cfg: dict, vocab_size: int, output_size: int, num_blocks: int, h
         vocab_size=vocab_size,
         embedding_dim=cfg["model"]["embedding_dim"],
         hidden_size=cfg["model"]["hidden_size"],
-        dropout=cfg["model"]["dropout"],
+        input_dropout=cfg["model"]["input_dropout"],
+        hidden_dropout=cfg["model"]["hidden_dropout"],
         dilations=cfg["model"]["dilations"],
+        kernel_size=cfg["model"]["kernel_size"],
         num_blocks=num_blocks,
     )
     if head == "softmax":
@@ -35,6 +37,18 @@ def build_model(cfg: dict, vocab_size: int, output_size: int, num_blocks: int, h
     else:
         raise ValueError(f"unsupported head: {head}")
     return IDCNNForTokenClassification(encoder, token_head)
+
+
+def apply_token_dropout(
+    input_ids: torch.Tensor,
+    mask: torch.Tensor,
+    unk_id: int,
+    probability: float,
+) -> torch.Tensor:
+    if probability <= 0:
+        return input_ids
+    drop_mask = (torch.rand(input_ids.shape, device=input_ids.device) < probability) & mask.bool()
+    return input_ids.masked_fill(drop_mask, unk_id)
 
 
 def entity_types_from_label2id(label2id: dict[str, int]) -> list[str]:
@@ -103,7 +117,14 @@ def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     output_size = len(entity2id) if args.head == "egp" else len(label2id)
     model = build_model(cfg, len(char2id), output_size, args.num_blocks, args.head).to(device)
-    optimizer = Adam(model.parameters(), lr=args.lr)
+    optimizer = Adam(
+        model.parameters(),
+        lr=args.lr,
+        betas=(args.beta1, args.beta2),
+        eps=args.epsilon,
+        weight_decay=args.weight_decay,
+    )
+    unk_id = char2id[UNK_TOKEN]
 
     best_f1 = -1.0
     best_epoch = 0
@@ -118,10 +139,14 @@ def train(args):
         progress = tqdm(train_loader, desc=f"epoch {epoch}", leave=False)
         for batch in progress:
             optimizer.zero_grad()
+            input_ids = batch["input_ids"].to(device)
+            mask = batch["mask"].to(device)
+            input_ids = apply_token_dropout(input_ids, mask, unk_id, args.token_dropout)
             labels = batch["span_labels"].to(device) if args.head == "egp" else batch["labels"].to(device)
-            out = model(batch["input_ids"].to(device), labels, batch["mask"].to(device))
+            out = model(input_ids, labels, mask)
             loss = out["loss"]
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             optimizer.step()
             total_loss += loss.item()
             steps += 1
@@ -202,6 +227,12 @@ def parse_args():
     parser.add_argument("--batch_size", type=int, default=cfg["train"]["batch_size"])
     parser.add_argument("--max_len", type=int, default=cfg["train"]["max_len"])
     parser.add_argument("--lr", type=float, default=cfg["train"]["lr"])
+    parser.add_argument("--beta1", type=float, default=cfg["train"]["beta1"])
+    parser.add_argument("--beta2", type=float, default=cfg["train"]["beta2"])
+    parser.add_argument("--epsilon", type=float, default=cfg["train"]["epsilon"])
+    parser.add_argument("--weight_decay", type=float, default=cfg["train"]["weight_decay"])
+    parser.add_argument("--grad_clip", type=float, default=cfg["train"]["grad_clip"])
+    parser.add_argument("--token_dropout", type=float, default=cfg["train"]["token_dropout"])
     parser.add_argument("--early_stop_patience", type=int, default=cfg["train"]["early_stop_patience"])
     parser.add_argument("--cpu", action="store_true")
     return parser.parse_args()

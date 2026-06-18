@@ -6,55 +6,70 @@ class IDCNNEncoder(nn.Module):
     def __init__(
         self,
         vocab_size: int,
-        embedding_dim: int = 128,
-        hidden_size: int = 128,
-        dropout: float = 0.3,
+        embedding_dim: int = 100,
+        hidden_size: int = 300,
+        input_dropout: float = 0.35,
+        hidden_dropout: float = 0.15,
         dilations: list[int] | None = None,
+        kernel_size: int = 3,
         num_blocks: int = 1,
     ):
         super().__init__()
         if dilations is None:
-            dilations = [1, 2, 4, 8, 1]
+            dilations = [1, 2, 1]
         self.num_blocks = num_blocks
         self.embedding = nn.Embedding(vocab_size, embedding_dim, padding_idx=0)
-        self.proj = nn.Conv1d(embedding_dim, hidden_size, kernel_size=1)
+        self.initial_conv = nn.Conv1d(
+            embedding_dim,
+            hidden_size,
+            kernel_size=kernel_size,
+            padding=kernel_size // 2,
+            dilation=1,
+        )
         self.layers = nn.ModuleList(
             [
                 nn.Conv1d(
                     hidden_size,
                     hidden_size,
-                    kernel_size=3,
-                    padding=dilation,
+                    kernel_size=kernel_size,
+                    padding=(kernel_size // 2) * dilation,
                     dilation=dilation,
                 )
                 for dilation in dilations
             ]
         )
         self.activation = nn.ReLU()
-        self.dropout = nn.Dropout(dropout)
+        self.input_dropout = nn.Dropout(input_dropout)
+        self.hidden_dropout = nn.Dropout(hidden_dropout)
+        self.reset_parameters()
+
+    def reset_parameters(self) -> None:
+        nn.init.xavier_uniform_(self.initial_conv.weight)
+        nn.init.constant_(self.initial_conv.bias, 0.01)
+        for layer in self.layers:
+            nn.init.dirac_(layer.weight)
+            nn.init.zeros_(layer.bias)
 
     def forward(self, input_ids: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         x = self.embedding(input_ids)
         token_mask = mask.unsqueeze(-1).to(dtype=x.dtype) if mask is not None else None
         if token_mask is not None:
             x = x * token_mask
-        x = self.dropout(x)
+        x = self.input_dropout(x)
         x = x.transpose(1, 2)
         conv_mask = token_mask.transpose(1, 2) if token_mask is not None else None
-        x = self.activation(self.proj(x))
+        x = self.activation(self.initial_conv(x))
         if conv_mask is not None:
             x = x * conv_mask
         for _ in range(self.num_blocks):
-            block_input = x
             for layer in self.layers:
                 x = self.activation(layer(x))
-                x = self.dropout(x)
                 if conv_mask is not None:
                     x = x * conv_mask
-            x = x + block_input
-            if conv_mask is not None:
-                x = x * conv_mask
-        return x.transpose(1, 2)
+        x = self.hidden_dropout(x.transpose(1, 2))
+        if token_mask is not None:
+            x = x * token_mask
+        return x
 
 
 class IDCNNForTokenClassification(nn.Module):

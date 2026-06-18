@@ -29,3 +29,8 @@ outputs/**
 *.tar.gz
 *.tmp
 *.log
+
+# Local reference materials.
+/dilated-cnn-ner-master/
+/Experiment.pdf
+/IDCNN.pdf

@@ -8,15 +8,22 @@ data:
   label2id_path: data/processed/label2id.json
 
 model:
-  embedding_dim: 128
-  hidden_size: 128
-  dropout: 0.3
-  dilations: [1, 2, 4, 8, 1]
+  embedding_dim: 100
+  hidden_size: 300
+  input_dropout: 0.35
+  hidden_dropout: 0.15
+  dilations: [1, 2, 1]
   kernel_size: 3
 
 train:
-  epochs: 30
-  batch_size: 64
+  epochs: 100
+  batch_size: 128
   max_len: 512
-  lr: 0.001
-  early_stop_patience: 5
+  lr: 0.0005
+  beta1: 0.9
+  beta2: 0.9
+  epsilon: 0.000001
+  weight_decay: 0.0
+  grad_clip: 5.0
+  token_dropout: 0.15
+  early_stop_patience: 100

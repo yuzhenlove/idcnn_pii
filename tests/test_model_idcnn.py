@@ -12,6 +12,61 @@ from model_idcnn import IDCNNEncoder
 
 
 class IDCNNEncoderTest(unittest.TestCase):
+    def test_default_architecture_matches_author_idcnn_block(self):
+        encoder = IDCNNEncoder(
+            vocab_size=50,
+            input_dropout=0.0,
+            hidden_dropout=0.0,
+        )
+
+        self.assertEqual(encoder.embedding.embedding_dim, 100)
+        self.assertEqual(encoder.initial_conv.in_channels, 100)
+        self.assertEqual(encoder.initial_conv.out_channels, 300)
+        self.assertEqual(encoder.initial_conv.kernel_size, (3,))
+        self.assertEqual(encoder.initial_conv.dilation, (1,))
+        self.assertEqual([layer.dilation[0] for layer in encoder.layers], [1, 2, 1])
+        self.assertTrue(all(layer.in_channels == 300 for layer in encoder.layers))
+        self.assertTrue(all(layer.out_channels == 300 for layer in encoder.layers))
+
+    def test_block_convolutions_use_identity_initialization(self):
+        encoder = IDCNNEncoder(
+            vocab_size=10,
+            embedding_dim=4,
+            hidden_size=4,
+            input_dropout=0.0,
+            hidden_dropout=0.0,
+            dilations=[1, 2, 1],
+        )
+
+        expected = torch.zeros_like(encoder.layers[0].weight)
+        expected[:, :, 1] = torch.eye(4)
+        for layer in encoder.layers:
+            self.assertTrue(torch.equal(layer.weight, expected))
+            self.assertTrue(torch.equal(layer.bias, torch.zeros_like(layer.bias)))
+        self.assertTrue(torch.allclose(encoder.initial_conv.bias, torch.full_like(encoder.initial_conv.bias, 0.01)))
+
+    def test_block_does_not_add_residual_input(self):
+        encoder = IDCNNEncoder(
+            vocab_size=3,
+            embedding_dim=1,
+            hidden_size=1,
+            input_dropout=0.0,
+            hidden_dropout=0.0,
+            dilations=[1],
+            num_blocks=1,
+        )
+        with torch.no_grad():
+            encoder.embedding.weight.fill_(1.0)
+            encoder.initial_conv.weight.zero_()
+            encoder.initial_conv.bias.fill_(1.0)
+            encoder.layers[0].weight.zero_()
+            encoder.layers[0].bias.zero_()
+
+        input_ids = torch.ones(1, 3, dtype=torch.long)
+        output = encoder(input_ids, input_ids.ne(0))
+
+        self.assertTrue(torch.equal(output, torch.zeros_like(output)))
+
     def test_outputs_are_invariant_to_right_padding(self):
         torch.manual_seed(0)
         seq = torch.arange(1, 13).unsqueeze(0) % 49 + 1
@@ -23,7 +78,8 @@ class IDCNNEncoderTest(unittest.TestCase):
                     vocab_size=50,
                     embedding_dim=8,
                     hidden_size=8,
-                    dropout=0.0,
+                    input_dropout=0.0,
+                    hidden_dropout=0.0,
                     num_blocks=num_blocks,
                 )
                 encoder.eval()
