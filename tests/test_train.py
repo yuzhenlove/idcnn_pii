@@ -21,7 +21,8 @@ class TrainConfigurationTest(unittest.TestCase):
                 "hidden_dropout": 0.15,
                 "dilations": [1, 2, 1],
                 "kernel_size": 3,
-            }
+            },
+            "train": {"drop_penalty": 0.0001},
         }
 
         model = train.build_model(cfg, vocab_size=50, output_size=7, num_blocks=2, head="softmax")
@@ -32,6 +33,7 @@ class TrainConfigurationTest(unittest.TestCase):
         self.assertEqual(model.encoder.hidden_dropout.p, 0.15)
         self.assertEqual([layer.dilation[0] for layer in model.encoder.layers], [1, 2, 1])
         self.assertEqual(model.encoder.num_blocks, 2)
+        self.assertEqual(model.drop_penalty, 0.0001)
 
     def test_token_dropout_replaces_only_active_tokens(self):
         input_ids = torch.tensor([[2, 3, 0], [4, 0, 0]])

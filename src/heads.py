@@ -4,10 +4,16 @@ from torch import nn
 from utils import PAD_LABEL_ID
 
 
+def initialize_output_layer(layer: nn.Linear) -> None:
+    nn.init.xavier_uniform_(layer.weight)
+    nn.init.constant_(layer.bias, 0.01)
+
+
 class SoftmaxHead(nn.Module):
     def __init__(self, hidden_size: int, num_labels: int):
         super().__init__()
         self.classifier = nn.Linear(hidden_size, num_labels)
+        initialize_output_layer(self.classifier)
         self.loss_fn = nn.CrossEntropyLoss(ignore_index=PAD_LABEL_ID)
 
     def forward(
@@ -112,6 +118,7 @@ class CRFHead(nn.Module):
     def __init__(self, hidden_size: int, num_labels: int):
         super().__init__()
         self.classifier = nn.Linear(hidden_size, num_labels)
+        initialize_output_layer(self.classifier)
         self.crf = LinearChainCRF(num_labels)
 
     def forward(
@@ -140,6 +147,8 @@ class EfficientGlobalPointerHead(nn.Module):
         self.head_size = head_size
         self.qk_proj = nn.Linear(hidden_size, head_size * 2)
         self.bias_proj = nn.Linear(hidden_size, entity_type_num * 2)
+        initialize_output_layer(self.qk_proj)
+        initialize_output_layer(self.bias_proj)
 
     def forward(
         self,

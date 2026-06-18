@@ -26,4 +26,5 @@ train:
   weight_decay: 0.0
   grad_clip: 5.0
   token_dropout: 0.15
+  drop_penalty: 0.0001
   early_stop_patience: 100

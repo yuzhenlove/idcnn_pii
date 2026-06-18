@@ -55,12 +55,14 @@ class IDCNNEncoder(nn.Module):
         input_ids: torch.Tensor,
         mask: torch.Tensor | None = None,
         return_all_blocks: bool = False,
+        apply_dropout: bool = True,
     ) -> torch.Tensor | list[torch.Tensor]:
         x = self.embedding(input_ids)
         token_mask = mask.unsqueeze(-1).to(dtype=x.dtype) if mask is not None else None
         if token_mask is not None:
             x = x * token_mask
-        x = self.input_dropout(x)
+        if apply_dropout:
+            x = self.input_dropout(x)
         x = x.transpose(1, 2)
         conv_mask = token_mask.transpose(1, 2) if token_mask is not None else None
         x = self.activation(self.initial_conv(x))
@@ -72,7 +74,9 @@ class IDCNNEncoder(nn.Module):
                 x = self.activation(layer(x))
                 if conv_mask is not None:
                     x = x * conv_mask
-            features = self.hidden_dropout(x.transpose(1, 2))
+            features = x.transpose(1, 2)
+            if apply_dropout:
+                features = self.hidden_dropout(features)
             if token_mask is not None:
                 features = features * token_mask
             block_features.append(features)
@@ -80,10 +84,11 @@ class IDCNNEncoder(nn.Module):
 
 
 class IDCNNForTokenClassification(nn.Module):
-    def __init__(self, encoder: IDCNNEncoder, head: nn.Module):
+    def __init__(self, encoder: IDCNNEncoder, head: nn.Module, drop_penalty: float = 0.0):
         super().__init__()
         self.encoder = encoder
         self.head = head
+        self.drop_penalty = drop_penalty
 
     def forward(
         self,
@@ -98,5 +103,16 @@ class IDCNNForTokenClassification(nn.Module):
         block_features = self.encoder(input_ids, mask, return_all_blocks=True)
         block_outputs = [self.head(features, labels, mask) for features in block_features]
         final_output = block_outputs[-1]
-        final_output["loss"] = torch.stack([output["loss"] for output in block_outputs]).sum()
+        loss = torch.stack([output["loss"] for output in block_outputs]).sum()
+        if self.drop_penalty > 0 and self.training:
+            no_dropout_features = self.encoder(input_ids, mask, return_all_blocks=True, apply_dropout=False)
+            no_dropout_logits = [self.head(features, None, mask)["logits"] for features in no_dropout_features]
+            drop_loss = torch.stack(
+                [
+                    0.5 * (output["logits"] - logits).square().sum()
+                    for output, logits in zip(block_outputs, no_dropout_logits)
+                ]
+            ).sum()
+            loss = loss + self.drop_penalty * drop_loss
+        final_output["loss"] = loss
         return final_output

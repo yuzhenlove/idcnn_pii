@@ -36,7 +36,7 @@ def build_model(cfg: dict, vocab_size: int, output_size: int, num_blocks: int, h
         token_head = EfficientGlobalPointerHead(cfg["model"]["hidden_size"], output_size)
     else:
         raise ValueError(f"unsupported head: {head}")
-    return IDCNNForTokenClassification(encoder, token_head)
+    return IDCNNForTokenClassification(encoder, token_head, drop_penalty=cfg["train"]["drop_penalty"])
 
 
 def apply_token_dropout(

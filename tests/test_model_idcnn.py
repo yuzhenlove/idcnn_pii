@@ -108,12 +108,19 @@ class IDCNNEncoderTest(unittest.TestCase):
 
 
 class FixedBlockEncoder(nn.Module):
-    def forward(self, input_ids, mask=None, return_all_blocks=False):
+    def forward(self, input_ids, mask=None, return_all_blocks=False, apply_dropout=True):
         block_features = [
             torch.full((1, 2, 1), 1.0),
             torch.full((1, 2, 1), 3.0),
             torch.full((1, 2, 1), 5.0),
         ]
+        return block_features if return_all_blocks else block_features[-1]
+
+
+class DropoutPairEncoder(nn.Module):
+    def forward(self, input_ids, mask=None, return_all_blocks=False, apply_dropout=True):
+        values = [1.0, 3.0] if apply_dropout else [0.0, 1.0]
+        block_features = [torch.full((1, 2, 1), value) for value in values]
         return block_features if return_all_blocks else block_features[-1]
 
 
@@ -140,6 +147,15 @@ class IDCNNForTokenClassificationTest(unittest.TestCase):
         self.assertEqual(head.calls, 3)
         self.assertEqual(output["loss"].item(), 9.0)
         self.assertTrue(torch.equal(output["logits"], torch.full((1, 2, 1), 5.0)))
+
+    def test_training_adds_expectation_linear_dropout_penalty(self):
+        model = IDCNNForTokenClassification(DropoutPairEncoder(), FeatureMeanHead(), drop_penalty=0.1)
+        input_ids = torch.ones(1, 2, dtype=torch.long)
+        labels = torch.zeros(1, 2, dtype=torch.long)
+
+        output = model(input_ids, labels, input_ids.ne(0))
+
+        self.assertAlmostEqual(output["loss"].item(), 4.5)
 
     def test_prediction_uses_only_last_block(self):
         head = FeatureMeanHead()
