@@ -1,5 +1,8 @@
+import math
+
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 from utils import PAD_LABEL_ID
 
@@ -138,6 +141,96 @@ class CRFHead(nn.Module):
     def decode(self, logits: torch.Tensor, mask: torch.Tensor, id2label: dict[int, str]) -> list[list[str]]:
         pred_ids = self.crf.decode(logits, mask)
         return [[id2label[idx] for idx in row] for row in pred_ids]
+
+
+class CascadePointerHead(nn.Module):
+    def __init__(
+        self,
+        hidden_size: int,
+        entity_type_num: int,
+        pointer_size: int = 64,
+        max_span_len: int = 64,
+    ):
+        super().__init__()
+        self.max_span_len = max_span_len
+        self.start_classifier = nn.Linear(hidden_size, entity_type_num + 1)
+        self.start_query = nn.Linear(hidden_size, pointer_size)
+        self.end_key = nn.Linear(hidden_size, pointer_size)
+        initialize_output_layer(self.start_classifier)
+        initialize_output_layer(self.start_query)
+        initialize_output_layer(self.end_key)
+        self.start_loss = nn.CrossEntropyLoss(ignore_index=PAD_LABEL_ID)
+        self.end_loss = nn.CrossEntropyLoss(ignore_index=PAD_LABEL_ID)
+
+    def forward(
+        self,
+        features: torch.Tensor,
+        labels: dict[str, torch.Tensor] | None = None,
+        mask: torch.Tensor | None = None,
+    ):
+        if mask is None:
+            mask = torch.ones(features.shape[:2], dtype=torch.bool, device=features.device)
+        start_logits = self.start_classifier(features)
+        end_logits = self.compute_end_logits(features, mask)
+        loss = None
+        if labels is not None:
+            loss = self.start_loss(
+                start_logits.reshape(-1, start_logits.size(-1)),
+                labels["start_labels"].reshape(-1),
+            )
+            if labels["end_labels"].ne(PAD_LABEL_ID).any():
+                loss = loss + self.end_loss(
+                    end_logits.reshape(-1, end_logits.size(-1)),
+                    labels["end_labels"].reshape(-1),
+                )
+        return {"loss": loss, "logits": {"start": start_logits, "end": end_logits}}
+
+    def compute_end_logits(self, features: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        query = self.start_query(features)
+        key = self.end_key(features)
+        batch_size, seq_len, _ = query.shape
+        invalid = torch.finfo(query.dtype).min
+        scores = []
+        for offset in range(self.max_span_len):
+            if offset >= seq_len:
+                scores.append(query.new_full((batch_size, seq_len), invalid))
+                continue
+            score = (query[:, : seq_len - offset] * key[:, offset:]).sum(dim=-1)
+            score = score / math.sqrt(query.size(-1))
+            valid = mask[:, : seq_len - offset] & mask[:, offset:]
+            score = score.masked_fill(~valid, invalid)
+            scores.append(F.pad(score, (0, offset), value=invalid))
+        return torch.stack(scores, dim=-1)
+
+    def decode(
+        self,
+        logits: dict[str, torch.Tensor],
+        mask: torch.Tensor,
+        id2entity: dict[int, str],
+        texts: list[str],
+    ) -> list[list[dict]]:
+        start_ids = logits["start"].argmax(dim=-1).detach().cpu()
+        end_offsets = logits["end"].argmax(dim=-1).detach().cpu()
+        masks = mask.detach().cpu()
+        decoded = []
+        for row_starts, row_ends, row_mask, text in zip(start_ids, end_offsets, masks, texts):
+            entities = []
+            length = int(row_mask.long().sum().item())
+            for start in range(length):
+                start_id = int(row_starts[start].item())
+                if start_id == 0:
+                    continue
+                end = start + int(row_ends[start].item()) + 1
+                entities.append(
+                    {
+                        "text": text[start:end],
+                        "type": id2entity[start_id - 1],
+                        "start": start,
+                        "end": end,
+                    }
+                )
+            decoded.append(entities)
+        return decoded
 
 
 class EfficientGlobalPointerHead(nn.Module):

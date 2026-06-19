@@ -56,6 +56,27 @@ class TrainConfigurationTest(unittest.TestCase):
         self.assertEqual(crf_model.drop_penalty, 0.0001)
         self.assertEqual(egp_model.drop_penalty, 0.0)
 
+    def test_build_model_configures_cascade_pointer_head(self):
+        cfg = {
+            "model": {
+                "embedding_dim": 100,
+                "hidden_size": 300,
+                "input_dropout": 0.35,
+                "hidden_dropout": 0.15,
+                "dilations": [1, 2, 1],
+                "kernel_size": 3,
+                "cascade_max_span_len": 64,
+                "cascade_pointer_size": 48,
+            },
+            "train": {"drop_penalty": 0.0001},
+        }
+
+        model = train.build_model(cfg, vocab_size=50, output_size=16, num_blocks=2, head="cascade")
+
+        self.assertEqual(model.head.max_span_len, 64)
+        self.assertEqual(model.head.start_query.out_features, 48)
+        self.assertEqual(model.drop_penalty, 0.0)
+
     def test_token_dropout_replaces_only_active_tokens(self):
         input_ids = torch.tensor([[2, 3, 0], [4, 0, 0]])
         mask = input_ids.ne(0)

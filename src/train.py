@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from data import PIIDataset, make_collate_fn, load_vocabs
 from evaluate import compute_metrics, labels_to_entities
-from heads import CRFHead, EfficientGlobalPointerHead, SoftmaxHead
+from heads import CRFHead, CascadePointerHead, EfficientGlobalPointerHead, SoftmaxHead
 from model_idcnn import IDCNNEncoder, IDCNNForTokenClassification
 from utils import UNK_TOKEN, ensure_dirs, load_yaml, make_logger, set_seed, write_json, write_jsonl
 
@@ -32,11 +32,18 @@ def build_model(cfg: dict, vocab_size: int, output_size: int, num_blocks: int, h
         token_head = SoftmaxHead(cfg["model"]["hidden_size"], output_size)
     elif head == "crf":
         token_head = CRFHead(cfg["model"]["hidden_size"], output_size)
+    elif head == "cascade":
+        token_head = CascadePointerHead(
+            cfg["model"]["hidden_size"],
+            output_size,
+            pointer_size=cfg["model"]["cascade_pointer_size"],
+            max_span_len=cfg["model"]["cascade_max_span_len"],
+        )
     elif head == "egp":
         token_head = EfficientGlobalPointerHead(cfg["model"]["hidden_size"], output_size)
     else:
         raise ValueError(f"unsupported head: {head}")
-    drop_penalty = 0.0 if head == "egp" else cfg["train"]["drop_penalty"]
+    drop_penalty = 0.0 if head in {"cascade", "egp"} else cfg["train"]["drop_penalty"]
     return IDCNNForTokenClassification(encoder, token_head, drop_penalty=drop_penalty)
 
 
@@ -61,6 +68,14 @@ def entity_types_from_label2id(label2id: dict[str, int]) -> list[str]:
     return sorted(entity_types)
 
 
+def labels_to_device(batch: dict, head: str, device: torch.device):
+    if head == "egp":
+        return batch["span_labels"].to(device)
+    if head == "cascade":
+        return {name: labels.to(device) for name, labels in batch["cascade_labels"].items()}
+    return batch["labels"].to(device)
+
+
 def evaluate(model, dataloader, device, id2label, id2entity=None, head: str = "softmax"):
     model.eval()
     gold_batches, pred_batches = [], []
@@ -71,11 +86,11 @@ def evaluate(model, dataloader, device, id2label, id2entity=None, head: str = "s
         for batch in dataloader:
             input_ids = batch["input_ids"].to(device)
             mask = batch["mask"].to(device)
-            labels = batch["span_labels"].to(device) if head == "egp" else batch["labels"].to(device)
+            labels = labels_to_device(batch, head, device)
             out = model(input_ids, labels, mask)
             total_loss += out["loss"].item()
             total_steps += 1
-            if head == "egp":
+            if head in {"cascade", "egp"}:
                 pred_entities = model.head.decode(out["logits"], mask, id2entity, batch["texts"])
             else:
                 decoded = model.head.decode(out["logits"], mask, id2label)
@@ -110,13 +125,16 @@ def train(args):
     dev_ds = PIIDataset(ROOT / cfg["data"]["dev_path"], char2id, label2id, args.max_len)
     test_ds = PIIDataset(ROOT / cfg["data"]["test_path"], char2id, label2id, args.max_len)
 
-    collate_fn = make_collate_fn(entity2id if args.head == "egp" else None)
+    if args.head == "cascade":
+        collate_fn = make_collate_fn(entity2id, cfg["model"]["cascade_max_span_len"])
+    else:
+        collate_fn = make_collate_fn(entity2id if args.head == "egp" else None)
     train_loader = DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn)
     dev_loader = DataLoader(dev_ds, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
     test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
 
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
-    output_size = len(entity2id) if args.head == "egp" else len(label2id)
+    output_size = len(entity2id) if args.head in {"cascade", "egp"} else len(label2id)
     model = build_model(cfg, len(char2id), output_size, args.num_blocks, args.head).to(device)
     optimizer = Adam(
         model.parameters(),
@@ -143,7 +161,7 @@ def train(args):
             input_ids = batch["input_ids"].to(device)
             mask = batch["mask"].to(device)
             input_ids = apply_token_dropout(input_ids, mask, unk_id, args.token_dropout)
-            labels = batch["span_labels"].to(device) if args.head == "egp" else batch["labels"].to(device)
+            labels = labels_to_device(batch, args.head, device)
             out = model(input_ids, labels, mask)
             loss = out["loss"]
             loss.backward()
@@ -221,7 +239,7 @@ def parse_args():
     cfg = load_yaml(ROOT / "configs.yaml")
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs.yaml")
-    parser.add_argument("--head", default="softmax", choices=["softmax", "crf", "egp"])
+    parser.add_argument("--head", default="softmax", choices=["softmax", "crf", "cascade", "egp"])
     parser.add_argument("--num_blocks", type=int, default=1, choices=[1, 2, 3, 4])
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=cfg["train"]["epochs"])

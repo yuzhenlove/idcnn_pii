@@ -14,6 +14,8 @@ model:
   hidden_dropout: 0.15
   dilations: [1, 2, 1]
   kernel_size: 3
+  cascade_max_span_len: 64
+  cascade_pointer_size: 64
 
 train:
   epochs: 100

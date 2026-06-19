@@ -1,12 +1,13 @@
 # IDCNN PII
 
-中文 PII 命名实体识别实验代码。项目比较三种 IDCNN 输出头：
+中文 PII 命名实体识别实验代码。项目支持四种 IDCNN 输出头：
 
 - `softmax`: IDCNN + Softmax token 分类
 - `crf`: IDCNN + CRF 结构化解码
+- `cascade`: IDCNN + 类型起点分类 + 64 字符条件终点指针
 - `egp`: IDCNN + Efficient GlobalPointer span 预测
 
-IDCNN 编码器保留中文字符级输入：每个字符使用 100 维可训练 embedding，不加载作者的英文预训练词向量，也不使用 shape 特征。初始卷积将 100 维字符特征映射为 300 维隐藏特征，重复 block 的 dilation 配置为 `[1, 2, 1]`。训练时对每个 block 使用同一个输出头计算损失并求和；Softmax 和 CRF 使用 expectation-linear dropout regularization，EGP 不使用该面向 token logits 的未归一化正则；预测时只使用最后一个 block 的输出。
+IDCNN 编码器保留中文字符级输入：每个字符使用 100 维可训练 embedding，不加载作者的英文预训练词向量，也不使用 shape 特征。初始卷积将 100 维字符特征映射为 300 维隐藏特征，重复 block 的 dilation 配置为 `[1, 2, 1]`。训练时对每个 block 使用同一个输出头计算损失并求和；Softmax 和 CRF 使用 expectation-linear dropout regularization，Cascade 和 EGP 不使用该面向 token logits 的未归一化正则；预测时只使用最后一个 block 的输出。
 
 ## 仓库缺少什么
 
@@ -75,13 +76,19 @@ uv run python scripts/prepare_data.py
 
 ## 快速跑完全部实验
 
-完整实验为 `3 heads x 4 blocks x 3 seeds = 36` 组。
+原三头基线实验为 `3 heads x 4 blocks x 3 seeds = 36` 组。
 
 ```bash
 uv run python scripts/prepare_data.py
 uv run python scripts/run_experiments.py --heads softmax crf egp --num_blocks 1 2 3 4 --seeds 42 43 44
 uv run python scripts/summarize_results.py
 uv run python scripts/plot_results.py
+```
+
+Cascade Pointer 可单独试跑：
+
+```bash
+uv run python src/train.py --head cascade --num_blocks 4 --seed 42
 ```
 
 默认训练参数来自 `configs.yaml`：

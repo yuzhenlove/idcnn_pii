@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--heads", nargs="+", default=["softmax"], choices=["softmax", "crf", "egp"])
+    parser.add_argument("--heads", nargs="+", default=["softmax"], choices=["softmax", "crf", "cascade", "egp"])
     parser.add_argument("--num_blocks", nargs="+", type=int, default=[1, 2, 3, 4], choices=[1, 2, 3, 4])
     parser.add_argument("--seeds", nargs="+", type=int, default=[42])
     parser.add_argument("--epochs", type=int)

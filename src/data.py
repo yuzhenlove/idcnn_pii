@@ -32,7 +32,11 @@ class PIIDataset(Dataset):
         }
 
 
-def collate_batch(batch: list[dict], entity2id: dict[str, int] | None = None) -> dict:
+def collate_batch(
+    batch: list[dict],
+    entity2id: dict[str, int] | None = None,
+    cascade_max_span_len: int | None = None,
+) -> dict:
     max_len = max(len(item["input_ids"]) for item in batch)
     input_ids, labels, masks = [], [], []
     for item in batch:
@@ -49,7 +53,21 @@ def collate_batch(batch: list[dict], entity2id: dict[str, int] | None = None) ->
         "labels": torch.tensor(labels, dtype=torch.long),
         "mask": torch.tensor(masks, dtype=torch.bool),
     }
-    if entity2id is not None:
+    if entity2id is not None and cascade_max_span_len is not None:
+        start_labels = torch.full((len(batch), max_len), -100, dtype=torch.long)
+        end_labels = torch.full((len(batch), max_len), -100, dtype=torch.long)
+        for batch_idx, item in enumerate(batch):
+            start_labels[batch_idx, : len(item["input_ids"])] = 0
+            for ent in item["entities"]:
+                span_len = ent["end"] - ent["start"]
+                if ent["type"] in entity2id and span_len <= cascade_max_span_len:
+                    start_labels[batch_idx, ent["start"]] = entity2id[ent["type"]] + 1
+                    end_labels[batch_idx, ent["start"]] = span_len - 1
+        result["cascade_labels"] = {
+            "start_labels": start_labels,
+            "end_labels": end_labels,
+        }
+    elif entity2id is not None:
         span_labels = torch.zeros(len(batch), len(entity2id), max_len, max_len, dtype=torch.float)
         for batch_idx, item in enumerate(batch):
             for ent in item["entities"]:
@@ -59,9 +77,12 @@ def collate_batch(batch: list[dict], entity2id: dict[str, int] | None = None) ->
     return result
 
 
-def make_collate_fn(entity2id: dict[str, int] | None = None):
+def make_collate_fn(
+    entity2id: dict[str, int] | None = None,
+    cascade_max_span_len: int | None = None,
+):
     def _collate(batch: list[dict]) -> dict:
-        return collate_batch(batch, entity2id)
+        return collate_batch(batch, entity2id, cascade_max_span_len)
 
     return _collate
 
