@@ -35,6 +35,27 @@ class TrainConfigurationTest(unittest.TestCase):
         self.assertEqual(model.encoder.num_blocks, 2)
         self.assertEqual(model.drop_penalty, 0.0001)
 
+    def test_egp_disables_token_logit_dropout_penalty(self):
+        cfg = {
+            "model": {
+                "embedding_dim": 100,
+                "hidden_size": 300,
+                "input_dropout": 0.35,
+                "hidden_dropout": 0.15,
+                "dilations": [1, 2, 1],
+                "kernel_size": 3,
+            },
+            "train": {"drop_penalty": 0.0001},
+        }
+
+        softmax_model = train.build_model(cfg, vocab_size=50, output_size=7, num_blocks=1, head="softmax")
+        crf_model = train.build_model(cfg, vocab_size=50, output_size=7, num_blocks=1, head="crf")
+        egp_model = train.build_model(cfg, vocab_size=50, output_size=7, num_blocks=1, head="egp")
+
+        self.assertEqual(softmax_model.drop_penalty, 0.0001)
+        self.assertEqual(crf_model.drop_penalty, 0.0001)
+        self.assertEqual(egp_model.drop_penalty, 0.0)
+
     def test_token_dropout_replaces_only_active_tokens(self):
         input_ids = torch.tensor([[2, 3, 0], [4, 0, 0]])
         mask = input_ids.ne(0)

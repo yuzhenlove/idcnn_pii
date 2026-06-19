@@ -6,7 +6,7 @@
 - `crf`: IDCNN + CRF 结构化解码
 - `egp`: IDCNN + Efficient GlobalPointer span 预测
 
-IDCNN 编码器保留中文字符级输入：每个字符使用 100 维可训练 embedding，不加载作者的英文预训练词向量，也不使用 shape 特征。初始卷积将 100 维字符特征映射为 300 维隐藏特征，重复 block 的 dilation 配置为 `[1, 2, 1]`。训练时对每个 block 使用同一个输出头计算损失并求和，同时使用 expectation-linear dropout regularization；预测时只使用最后一个 block 的输出。
+IDCNN 编码器保留中文字符级输入：每个字符使用 100 维可训练 embedding，不加载作者的英文预训练词向量，也不使用 shape 特征。初始卷积将 100 维字符特征映射为 300 维隐藏特征，重复 block 的 dilation 配置为 `[1, 2, 1]`。训练时对每个 block 使用同一个输出头计算损失并求和；Softmax 和 CRF 使用 expectation-linear dropout regularization，EGP 不使用该面向 token logits 的未归一化正则；预测时只使用最后一个 block 的输出。
 
 ## 仓库缺少什么
 
