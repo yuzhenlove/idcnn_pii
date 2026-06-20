@@ -50,7 +50,15 @@ def evaluate_checkpoint(checkpoint_path: Path, batch_size: int, cpu: bool) -> tu
     model.load_state_dict(checkpoint["model_state_dict"])
     device = torch.device("cpu" if cpu or not torch.cuda.is_available() else "cuda")
     model.to(device)
-    return evaluate(model, test_loader, device, id2label, id2entity, head="cascade")
+    return evaluate(
+        model,
+        test_loader,
+        device,
+        id2label,
+        id2entity,
+        head="cascade",
+        autocast_dtype=torch.bfloat16,
+    )
 
 
 def evaluate_experiment(experiment: int, batch_size: int, cpu: bool) -> list[dict]:

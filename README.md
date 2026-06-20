@@ -153,7 +153,7 @@ uv run python scripts/plot_results.py \
 
 NAS 搜索使用 CascadePointer，只在 Train/Dev 上训练和选择架构。优化目标是
 Dev 实体级 Micro-F1 最大化与长度128前向 FLOPs 最小化。每个候选固定
-`seed=42`；初始种群不计入代数。
+`seed=42`，在 CUDA/A100 上使用 BF16 混合精度；初始种群不计入代数。
 
 三个实验分别为：
 

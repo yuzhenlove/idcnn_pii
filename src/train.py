@@ -76,7 +76,15 @@ def labels_to_device(batch: dict, head: str, device: torch.device):
     return batch["labels"].to(device)
 
 
-def evaluate(model, dataloader, device, id2label, id2entity=None, head: str = "softmax"):
+def evaluate(
+    model,
+    dataloader,
+    device,
+    id2label,
+    id2entity=None,
+    head: str = "softmax",
+    autocast_dtype=None,
+):
     model.eval()
     gold_batches, pred_batches = [], []
     predictions = []
@@ -87,7 +95,12 @@ def evaluate(model, dataloader, device, id2label, id2entity=None, head: str = "s
             input_ids = batch["input_ids"].to(device)
             mask = batch["mask"].to(device)
             labels = labels_to_device(batch, head, device)
-            out = model(input_ids, labels, mask)
+            with torch.autocast(
+                device_type=device.type,
+                dtype=autocast_dtype or torch.bfloat16,
+                enabled=autocast_dtype is not None and device.type == "cuda",
+            ):
+                out = model(input_ids, labels, mask)
             total_loss += out["loss"].item()
             total_steps += 1
             if head in {"cascade", "egp"}:

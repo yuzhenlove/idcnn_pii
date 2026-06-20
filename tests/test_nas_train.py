@@ -2,6 +2,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import torch
 
@@ -14,6 +15,7 @@ from nas_train import (
     build_nas_model,
     candidate_data_paths,
     count_nas_flops,
+    nas_autocast,
 )
 
 
@@ -47,6 +49,26 @@ CFG = {
 
 
 class NasTrainTest(unittest.TestCase):
+    def test_nas_autocast_uses_bfloat16_on_cuda(self):
+        with patch("nas_train.torch.autocast") as autocast:
+            nas_autocast(torch.device("cuda"))
+
+        autocast.assert_called_once_with(
+            device_type="cuda",
+            dtype=torch.bfloat16,
+            enabled=True,
+        )
+
+    def test_nas_autocast_is_disabled_on_cpu(self):
+        with patch("nas_train.torch.autocast") as autocast:
+            nas_autocast(torch.device("cpu"))
+
+        autocast.assert_called_once_with(
+            device_type="cpu",
+            dtype=torch.bfloat16,
+            enabled=False,
+        )
+
     def test_builds_decoded_nas_model_with_cascade_head(self):
         individual = (1, 0, 2, 0, 0, 0, 1, 1, 1, 2, 2, 2)
 

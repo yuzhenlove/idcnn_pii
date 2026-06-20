@@ -21,6 +21,14 @@ from utils import UNK_TOKEN, ensure_dirs, load_yaml, make_logger, set_seed, writ
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def nas_autocast(device: torch.device):
+    return torch.autocast(
+        device_type=device.type,
+        dtype=torch.bfloat16,
+        enabled=device.type == "cuda",
+    )
+
+
 def candidate_data_paths(cfg: dict, root: Path) -> dict[str, Path]:
     return {
         "processed_dir": root / cfg["data"]["processed_dir"],
@@ -184,7 +192,8 @@ def train_candidate(args) -> dict:
             mask = batch["mask"].to(device)
             input_ids = apply_token_dropout(input_ids, mask, unk_id, args.token_dropout)
             labels = {name: value.to(device) for name, value in batch["cascade_labels"].items()}
-            loss = model(input_ids, labels, mask)["loss"]
+            with nas_autocast(device):
+                loss = model(input_ids, labels, mask)["loss"]
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             optimizer.step()
@@ -198,6 +207,7 @@ def train_candidate(args) -> dict:
             id2label,
             id2entity,
             head="cascade",
+            autocast_dtype=torch.bfloat16,
         )
         dev_micro = dev_metrics["micro"]
         history.append(
@@ -224,6 +234,7 @@ def train_candidate(args) -> dict:
                     "label2id": label2id,
                     "entity2id": entity2id,
                     "best_epoch": best_epoch,
+                    "precision": "bf16",
                 },
                 checkpoint_path,
             )
@@ -234,13 +245,22 @@ def train_candidate(args) -> dict:
 
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
-    dev_metrics, _ = evaluate(model, dev_loader, device, id2label, id2entity, head="cascade")
+    dev_metrics, _ = evaluate(
+        model,
+        dev_loader,
+        device,
+        id2label,
+        id2entity,
+        head="cascade",
+        autocast_dtype=torch.bfloat16,
+    )
     result = {
         "candidate_id": individual_key(individual, args.experiment),
         "individual": list(individual),
         "architecture": decode_individual(individual, args.experiment),
         "experiment": args.experiment,
         "seed": 42,
+        "precision": "bf16",
         "best_epoch": best_epoch,
         "dev": dev_metrics,
         "dev_f1": dev_metrics["micro"]["f1"],
