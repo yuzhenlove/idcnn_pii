@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -8,12 +9,20 @@ import pandas as pd
 
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUTS_DIR = ROOT / "outputs"
-FIGURES_DIR = OUTPUTS_DIR / "figures"
 
-HEAD_ORDER = ["softmax", "crf", "egp"]
-HEAD_LABELS = {"softmax": "Softmax", "crf": "CRF", "egp": "EGP"}
-COLORS = {"softmax": "#4C72B0", "crf": "#C44E52", "egp": "#55A868"}
+HEAD_ORDER = ["softmax", "crf", "egp", "cascade"]
+HEAD_LABELS = {
+    "softmax": "Softmax",
+    "crf": "CRF",
+    "egp": "EGP",
+    "cascade": "Cascade",
+}
+COLORS = {
+    "softmax": "#4C72B0",
+    "crf": "#C44E52",
+    "egp": "#55A868",
+    "cascade": "#8172B2",
+}
 
 
 def configure_style() -> None:
@@ -38,23 +47,36 @@ def configure_style() -> None:
     )
 
 
-def save_figure(fig: plt.Figure, name: str) -> None:
-    FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+def save_figure(fig: plt.Figure, name: str, figures_dir: Path) -> None:
+    figures_dir.mkdir(parents=True, exist_ok=True)
     for suffix in ["png", "pdf", "svg"]:
-        fig.savefig(FIGURES_DIR / f"{name}.{suffix}", bbox_inches="tight")
+        fig.savefig(figures_dir / f"{name}.{suffix}", bbox_inches="tight")
     plt.close(fig)
 
 
-def load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    summary_path = OUTPUTS_DIR / "summary.csv"
-    mean_std_path = OUTPUTS_DIR / "summary_mean_std.csv"
+def score_limits(values: pd.Series, margin: float = 0.02) -> tuple[float, float]:
+    lower = max(0.0, float(values.min()) - margin)
+    upper = min(1.0, float(values.max()) + margin)
+    return lower, upper
+
+
+def load_data(
+    outputs_dir: Path,
+    heads: list[str],
+    tag: str,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    report_dir = outputs_dir / "reports" / tag
+    summary_path = report_dir / "summary.csv"
+    mean_std_path = report_dir / "summary_mean_std.csv"
     if not summary_path.exists() or not mean_std_path.exists():
         raise FileNotFoundError("Run scripts/summarize_results.py before plotting.")
 
     summary = pd.read_csv(summary_path)
     mean_std = pd.read_csv(mean_std_path)
-    summary["head"] = pd.Categorical(summary["head"], categories=HEAD_ORDER, ordered=True)
-    mean_std["head"] = pd.Categorical(mean_std["head"], categories=HEAD_ORDER, ordered=True)
+    summary = summary[summary["head"].isin(heads)].copy()
+    mean_std = mean_std[mean_std["head"].isin(heads)].copy()
+    summary["head"] = pd.Categorical(summary["head"], categories=heads, ordered=True)
+    mean_std["head"] = pd.Categorical(mean_std["head"], categories=heads, ordered=True)
     summary = summary.sort_values(["head", "num_blocks", "seed"]).reset_index(drop=True)
     mean_std = mean_std.sort_values(["head", "num_blocks"]).reset_index(drop=True)
 
@@ -77,9 +99,13 @@ def load_data() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     return summary, mean_std, metric_stats
 
 
-def plot_test_f1_line(mean_std: pd.DataFrame) -> None:
+def plot_test_f1_line(
+    mean_std: pd.DataFrame,
+    heads: list[str],
+    figures_dir: Path,
+) -> None:
     fig, ax = plt.subplots(figsize=(6.2, 4.2))
-    for head in HEAD_ORDER:
+    for head in heads:
         data = mean_std[mean_std["head"] == head]
         ax.errorbar(
             data["num_blocks"],
@@ -95,17 +121,24 @@ def plot_test_f1_line(mean_std: pd.DataFrame) -> None:
     ax.set_xlabel("Number of IDCNN blocks")
     ax.set_ylabel("Test F1")
     ax.set_xticks([1, 2, 3, 4])
-    ax.set_ylim(0.78, 0.93)
-    ax.legend(ncol=3, loc="upper right")
-    save_figure(fig, "test_f1_line_errorbar")
+    ax.set_ylim(*score_limits(mean_std["test_f1_mean"]))
+    ax.legend(ncol=len(heads), loc="upper right")
+    save_figure(fig, "test_f1_line_errorbar", figures_dir)
 
 
-def plot_test_f1_grouped_bar(mean_std: pd.DataFrame) -> None:
+def plot_test_f1_grouped_bar(
+    mean_std: pd.DataFrame,
+    heads: list[str],
+    figures_dir: Path,
+) -> None:
     fig, ax = plt.subplots(figsize=(7.0, 4.4))
     x = np.arange(1, 5)
-    width = 0.23
-    offsets = {"softmax": -width, "crf": 0.0, "egp": width}
-    for head in HEAD_ORDER:
+    width = 0.8 / len(heads)
+    offsets = {
+        head: (index - (len(heads) - 1) / 2) * width
+        for index, head in enumerate(heads)
+    }
+    for head in heads:
         data = mean_std[mean_std["head"] == head].set_index("num_blocks").loc[x]
         ax.bar(
             x + offsets[head],
@@ -122,15 +155,19 @@ def plot_test_f1_grouped_bar(mean_std: pd.DataFrame) -> None:
     ax.set_xlabel("Number of IDCNN blocks")
     ax.set_ylabel("Test F1")
     ax.set_xticks(x)
-    ax.set_ylim(0.78, 0.93)
-    ax.legend(ncol=3, loc="upper right")
-    save_figure(fig, "test_f1_grouped_bar")
+    ax.set_ylim(*score_limits(mean_std["test_f1_mean"]))
+    ax.legend(ncol=len(heads), loc="upper right")
+    save_figure(fig, "test_f1_grouped_bar", figures_dir)
 
 
-def plot_dev_test_comparison(mean_std: pd.DataFrame) -> None:
+def plot_dev_test_comparison(
+    mean_std: pd.DataFrame,
+    heads: list[str],
+    figures_dir: Path,
+) -> None:
     fig, axes = plt.subplots(1, 2, figsize=(9.2, 4.0), sharey=True)
     for ax, split in zip(axes, ["dev", "test"], strict=True):
-        for head in HEAD_ORDER:
+        for head in heads:
             data = mean_std[mean_std["head"] == head]
             ax.errorbar(
                 data["num_blocks"],
@@ -145,14 +182,18 @@ def plot_dev_test_comparison(mean_std: pd.DataFrame) -> None:
         ax.set_title(f"{split.capitalize()} F1")
         ax.set_xlabel("Number of IDCNN blocks")
         ax.set_xticks([1, 2, 3, 4])
-        ax.set_ylim(0.78, 0.93)
+        ax.set_ylim(*score_limits(pd.concat([mean_std["dev_f1_mean"], mean_std["test_f1_mean"]])))
     axes[0].set_ylabel("F1")
     axes[1].legend(ncol=1, loc="upper right")
     fig.suptitle("Development vs. Test Performance", y=1.03, fontsize=13)
-    save_figure(fig, "dev_test_f1_comparison")
+    save_figure(fig, "dev_test_f1_comparison", figures_dir)
 
 
-def plot_precision_recall_f1(metric_stats: pd.DataFrame) -> None:
+def plot_precision_recall_f1(
+    metric_stats: pd.DataFrame,
+    heads: list[str],
+    figures_dir: Path,
+) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(12.0, 3.8), sharey=True)
     metrics = [
         ("test_precision", "Precision"),
@@ -160,7 +201,7 @@ def plot_precision_recall_f1(metric_stats: pd.DataFrame) -> None:
         ("test_f1", "F1"),
     ]
     for ax, (metric, label) in zip(axes, metrics, strict=True):
-        for head in HEAD_ORDER:
+        for head in heads:
             data = metric_stats[metric_stats["head"] == head]
             ax.errorbar(
                 data["num_blocks"],
@@ -175,37 +216,55 @@ def plot_precision_recall_f1(metric_stats: pd.DataFrame) -> None:
         ax.set_title(label)
         ax.set_xlabel("Number of IDCNN blocks")
         ax.set_xticks([1, 2, 3, 4])
-        ax.set_ylim(0.72, 0.94)
+        values = pd.concat(
+            [
+                metric_stats["test_precision_mean"],
+                metric_stats["test_recall_mean"],
+                metric_stats["test_f1_mean"],
+            ]
+        )
+        ax.set_ylim(*score_limits(values))
     axes[0].set_ylabel("Test score")
     axes[-1].legend(loc="lower left")
     fig.suptitle("Test Precision, Recall, and F1", y=1.04, fontsize=13)
-    save_figure(fig, "test_precision_recall_f1")
+    save_figure(fig, "test_precision_recall_f1", figures_dir)
 
 
-def plot_heatmap(mean_std: pd.DataFrame) -> None:
+def plot_heatmap(
+    mean_std: pd.DataFrame,
+    heads: list[str],
+    figures_dir: Path,
+) -> None:
     matrix = (
         mean_std.pivot(index="head", columns="num_blocks", values="test_f1_mean")
-        .loc[HEAD_ORDER, [1, 2, 3, 4]]
+        .loc[heads, [1, 2, 3, 4]]
         .to_numpy()
     )
-    fig, ax = plt.subplots(figsize=(6.2, 3.2))
-    im = ax.imshow(matrix, cmap="YlGnBu", vmin=0.80, vmax=0.92, aspect="auto")
+    fig, ax = plt.subplots(figsize=(6.2, 2.0 + 0.6 * len(heads)))
+    im = ax.imshow(
+        matrix,
+        cmap="YlGnBu",
+        vmin=float(matrix.min()),
+        vmax=float(matrix.max()),
+        aspect="auto",
+    )
     ax.set_title("Test F1 Heatmap")
     ax.set_xlabel("Number of IDCNN blocks")
     ax.set_ylabel("Output head")
     ax.set_xticks(np.arange(4), labels=[1, 2, 3, 4])
-    ax.set_yticks(np.arange(3), labels=[HEAD_LABELS[h] for h in HEAD_ORDER])
+    ax.set_yticks(np.arange(len(heads)), labels=[HEAD_LABELS[h] for h in heads])
+    midpoint = (float(matrix.min()) + float(matrix.max())) / 2
     for i in range(matrix.shape[0]):
         for j in range(matrix.shape[1]):
-            color = "white" if matrix[i, j] > 0.875 else "#1F2937"
+            color = "white" if matrix[i, j] > midpoint else "#1F2937"
             ax.text(j, i, f"{matrix[i, j]:.3f}", ha="center", va="center", color=color, fontsize=9)
     cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label("Test F1")
     ax.grid(False)
-    save_figure(fig, "test_f1_heatmap")
+    save_figure(fig, "test_f1_heatmap", figures_dir)
 
 
-def plot_ranked_models(mean_std: pd.DataFrame) -> None:
+def plot_ranked_models(mean_std: pd.DataFrame, figures_dir: Path) -> None:
     data = mean_std.copy()
     data["label"] = data["head"].astype(str).map(HEAD_LABELS) + " / b=" + data["num_blocks"].astype(str)
     data = data.sort_values("test_f1_mean", ascending=True)
@@ -223,15 +282,26 @@ def plot_ranked_models(mean_std: pd.DataFrame) -> None:
     )
     ax.set_title("Ranking of Head and Block Combinations")
     ax.set_xlabel("Test F1")
-    ax.set_xlim(0.78, 0.925)
+    ax.set_xlim(*score_limits(data["test_f1_mean"]))
     for value, label in zip(data["test_f1_mean"], data["label"], strict=True):
         ax.text(value + 0.002, label, f"{value:.3f}", va="center", fontsize=8)
-    save_figure(fig, "test_f1_ranking")
+    save_figure(fig, "test_f1_ranking", figures_dir)
 
 
-def plot_seed_variation(summary: pd.DataFrame) -> None:
-    fig, axes = plt.subplots(1, 3, figsize=(12.0, 3.7), sharey=True)
-    for ax, head in zip(axes, HEAD_ORDER, strict=True):
+def plot_seed_variation(
+    summary: pd.DataFrame,
+    heads: list[str],
+    figures_dir: Path,
+) -> None:
+    fig, axes_grid = plt.subplots(
+        1,
+        len(heads),
+        figsize=(4.0 * len(heads), 3.7),
+        sharey=True,
+        squeeze=False,
+    )
+    axes = axes_grid[0]
+    for ax, head in zip(axes, heads, strict=True):
         data = summary[summary["head"] == head]
         for seed, seed_data in data.groupby("seed"):
             ax.plot(
@@ -244,24 +314,44 @@ def plot_seed_variation(summary: pd.DataFrame) -> None:
         ax.set_title(HEAD_LABELS[head])
         ax.set_xlabel("Number of IDCNN blocks")
         ax.set_xticks([1, 2, 3, 4])
-        ax.set_ylim(0.78, 0.925)
+        ax.set_ylim(*score_limits(summary["test_f1"]))
     axes[0].set_ylabel("Test F1")
     axes[-1].legend(loc="lower left")
     fig.suptitle("Seed-level Test F1 Variation", y=1.04, fontsize=13)
-    save_figure(fig, "seed_variation_test_f1")
+    save_figure(fig, "seed_variation_test_f1", figures_dir)
+
+
+def generate_figures(
+    outputs_dir: str | Path,
+    heads: list[str],
+    tag: str,
+) -> Path:
+    outputs_dir = Path(outputs_dir)
+    figures_dir = outputs_dir / "reports" / tag / "figures"
+    configure_style()
+    summary, mean_std, metric_stats = load_data(outputs_dir, heads, tag)
+    plot_test_f1_line(mean_std, heads, figures_dir)
+    plot_test_f1_grouped_bar(mean_std, heads, figures_dir)
+    plot_dev_test_comparison(mean_std, heads, figures_dir)
+    plot_precision_recall_f1(metric_stats, heads, figures_dir)
+    plot_heatmap(mean_std, heads, figures_dir)
+    plot_ranked_models(mean_std, figures_dir)
+    plot_seed_variation(summary, heads, figures_dir)
+    print(f"wrote figures to {figures_dir}")
+    return figures_dir
 
 
 def main() -> None:
-    configure_style()
-    summary, mean_std, metric_stats = load_data()
-    plot_test_f1_line(mean_std)
-    plot_test_f1_grouped_bar(mean_std)
-    plot_dev_test_comparison(mean_std)
-    plot_precision_recall_f1(metric_stats)
-    plot_heatmap(mean_std)
-    plot_ranked_models(mean_std)
-    plot_seed_variation(summary)
-    print(f"wrote figures to {FIGURES_DIR}")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--outputs_dir", default="outputs")
+    parser.add_argument("--heads", nargs="+", choices=HEAD_ORDER, default=HEAD_ORDER)
+    parser.add_argument("--tag", default="all_heads")
+    args = parser.parse_args()
+
+    outputs_dir = Path(args.outputs_dir)
+    if not outputs_dir.is_absolute():
+        outputs_dir = ROOT / outputs_dir
+    generate_figures(outputs_dir, args.heads, args.tag)
 
 
 if __name__ == "__main__":
