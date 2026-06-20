@@ -16,8 +16,13 @@ sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT))
 
 from scripts.run_nas_search import (
+    assign_candidates_to_gpus,
     build_candidate_command,
+    evaluate_population,
+    estimate_candidate_cost,
+    estimate_training_seconds,
     generate_offspring,
+    generate_unique_initial_population,
     load_cached_results,
     parse_args,
     parse_gpu_list,
@@ -31,6 +36,62 @@ from nsga2 import assign_rank_and_crowding
 
 
 class NasSearchTest(unittest.TestCase):
+    def test_structural_cost_increases_with_width_and_cell_count(self):
+        small = (0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 2)
+        wide = (3, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 2)
+        repeated = (0, 0, 3, 0, 0, 0, 0, 0, 1, 0, 0, 2)
+
+        self.assertGreater(
+            estimate_candidate_cost(wide, experiment=1),
+            estimate_candidate_cost(small, experiment=1),
+        )
+        self.assertGreater(
+            estimate_candidate_cost(repeated, experiment=1),
+            estimate_candidate_cost(small, experiment=1),
+        )
+
+    def test_training_time_estimate_prefers_same_width_ratio_history(self):
+        target = (3, 2, 1, 0, 0, 0, 0, 0, 1, 0, 0, 2)
+        history = [
+            {
+                "individual": [3, 2, 0, 0, 0, 0, 0, 0, 1, 0, 0, 2],
+                "train_seconds": 1200.0,
+            },
+            {
+                "individual": [0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 2],
+                "train_seconds": 100.0,
+            },
+        ]
+
+        estimate = estimate_training_seconds(target, history, experiment=1)
+
+        self.assertEqual(estimate, 1200.0)
+
+    def test_balances_longest_candidates_across_gpu_capacity(self):
+        candidates = [
+            ("a", 10.0),
+            ("b", 9.0),
+            ("c", 8.0),
+            ("d", 7.0),
+            ("e", 6.0),
+            ("f", 5.0),
+        ]
+
+        assignments = assign_candidates_to_gpus(
+            candidates,
+            gpus=("0", "1", "2"),
+            workers_per_gpu=2,
+        )
+
+        loads = {"0": 0.0, "1": 0.0, "2": 0.0}
+        counts = {"0": 0, "1": 0, "2": 0}
+        for candidate, cost, gpu_id in assignments:
+            loads[gpu_id] += cost
+            counts[gpu_id] += 1
+
+        self.assertEqual(loads, {"0": 15.0, "1": 15.0, "2": 15.0})
+        self.assertEqual(counts, {"0": 2, "1": 2, "2": 2})
+
     def test_parses_comma_separated_gpu_list(self):
         self.assertEqual(parse_gpu_list("0,1,2,3,4"), ("0", "1", "2", "3", "4"))
 
@@ -69,6 +130,76 @@ class NasSearchTest(unittest.TestCase):
             self.assertEqual(call.kwargs["env"]["CUDA_DEVICE_ORDER"], "PCI_BUS_ID")
             self.assertEqual(call.kwargs["env"].get("PATH"), os.environ.get("PATH"))
 
+    def test_parallel_jobs_honor_preassigned_gpu(self):
+        class CompletedProcess:
+            def poll(self):
+                return 0
+
+        with tempfile.TemporaryDirectory() as directory:
+            jobs = [
+                (["python", "slow"], Path(directory) / "slow", "4"),
+                (["python", "fast"], Path(directory) / "fast", "0"),
+            ]
+            with patch(
+                "scripts.run_nas_search.subprocess.Popen",
+                side_effect=lambda *args, **kwargs: CompletedProcess(),
+            ) as popen:
+                with redirect_stdout(io.StringIO()):
+                    run_parallel_jobs(
+                        jobs,
+                        workers=2,
+                        status_interval=60,
+                        gpus=("0", "1", "2", "3", "4"),
+                        workers_per_gpu=1,
+                    )
+
+        assigned = [call.kwargs["env"]["CUDA_VISIBLE_DEVICES"] for call in popen.call_args_list]
+        self.assertEqual(assigned, ["4", "0"])
+
+    def test_population_evaluation_preassigns_balanced_gpu_jobs(self):
+        individuals = [
+            (index % 4, index % 3, index % 4, 0, 0, 0, 0, 0, 1, 0, 0, 2)
+            for index in range(6)
+        ]
+        completed = {
+            individual_key(individual, 1): {
+                "individual": list(normalize_individual(individual, 1)),
+                "dev_f1": 0.8,
+                "flops": 100,
+                "checkpoint": "best.pt",
+            }
+            for individual in individuals
+        }
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch(
+                "scripts.run_nas_search.load_cached_results",
+                side_effect=[({}, individuals), (completed, [])],
+            ):
+                with patch("scripts.run_nas_search.run_parallel_jobs") as run_jobs:
+                    with redirect_stdout(io.StringIO()):
+                        evaluate_population(
+                            individuals,
+                            experiment=1,
+                            candidates_dir=Path(directory),
+                            archive=[],
+                            workers=6,
+                            status_interval=60,
+                            epochs=1,
+                            batch_size=4,
+                            cpu=False,
+                            gpus=("0", "1", "2"),
+                            workers_per_gpu=2,
+                        )
+
+        scheduled_jobs = run_jobs.call_args.args[0]
+        assigned = [job[2] for job in scheduled_jobs]
+        self.assertEqual({gpu_id: assigned.count(gpu_id) for gpu_id in set(assigned)}, {
+            "0": 2,
+            "1": 2,
+            "2": 2,
+        })
+
     def test_search_cli_accepts_gpu_slots(self):
         argv = [
             "run_nas_search.py",
@@ -86,7 +217,7 @@ class NasSearchTest(unittest.TestCase):
         self.assertEqual(args.gpus, ("0", "1", "2", "3", "4"))
         self.assertEqual(args.workers_per_gpu, 2)
 
-    def test_dry_run_prints_round_robin_gpu_assignments(self):
+    def test_dry_run_prints_balanced_gpu_assignments(self):
         args = SimpleNamespace(
             search_seed=42,
             population_size=10,
@@ -110,21 +241,33 @@ class NasSearchTest(unittest.TestCase):
             for line in output.getvalue().splitlines()
             if line.startswith("CUDA_VISIBLE_DEVICES=")
         ]
-        self.assertEqual(
-            assignments,
-            [
-                "CUDA_VISIBLE_DEVICES=0",
-                "CUDA_VISIBLE_DEVICES=1",
-                "CUDA_VISIBLE_DEVICES=2",
-                "CUDA_VISIBLE_DEVICES=3",
-                "CUDA_VISIBLE_DEVICES=4",
-                "CUDA_VISIBLE_DEVICES=0",
-                "CUDA_VISIBLE_DEVICES=1",
-                "CUDA_VISIBLE_DEVICES=2",
-                "CUDA_VISIBLE_DEVICES=3",
-                "CUDA_VISIBLE_DEVICES=4",
-            ],
+        rng = random.Random(42)
+        individuals = generate_unique_initial_population(10, 3, rng)
+        expected = [
+            f"CUDA_VISIBLE_DEVICES={gpu_id}"
+            for _individual, _cost, gpu_id in assign_candidates_to_gpus(
+                [
+                    (individual, estimate_candidate_cost(individual, 3))
+                    for individual in individuals
+                ],
+                ("0", "1", "2", "3", "4"),
+                2,
+            )
+        ]
+        self.assertEqual(assignments, expected)
+
+    def test_balancer_queues_more_candidates_than_concurrent_slots(self):
+        assignments = assign_candidates_to_gpus(
+            [(str(index), float(20 - index)) for index in range(9)],
+            gpus=("0", "1"),
+            workers_per_gpu=2,
         )
+
+        counts = [
+            sum(gpu_id == item for _candidate, _cost, gpu_id in assignments)
+            for item in ("0", "1")
+        ]
+        self.assertEqual(sorted(counts), [4, 5])
 
     def test_budget_excludes_initial_population_from_generation_count(self):
         self.assertEqual(search_budget(population_size=10, generations=5), 60)
