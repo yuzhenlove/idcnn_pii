@@ -128,13 +128,25 @@ uv run python scripts/run_experiments.py --heads softmax crf egp --num_blocks 1 
 只汇总已有结果：
 
 ```bash
-uv run python scripts/summarize_results.py
+uv run python scripts/summarize_results.py \
+  --heads softmax crf egp \
+  --tag baseline
+
+uv run python scripts/summarize_results.py \
+  --heads softmax crf egp cascade \
+  --tag all_heads
 ```
 
-只重新画图：
+生成对应图表：
 
 ```bash
-uv run python scripts/plot_results.py
+uv run python scripts/plot_results.py \
+  --heads softmax crf egp \
+  --tag baseline
+
+uv run python scripts/plot_results.py \
+  --heads softmax crf egp cascade \
+  --tag all_heads
 ```
 
 ## 输出位置
@@ -143,7 +155,9 @@ uv run python scripts/plot_results.py
 - 最优模型：`best.pt`
 - 指标：`metrics.json`
 - 测试集预测：`test_predictions.jsonl`
-- 总表：`outputs/summary.csv`
-- 均值方差：`outputs/summary_mean_std.csv`
-- 图表：`outputs/figures/`
+- 三头基线报告：`outputs/reports/baseline/`
+- 四头完整报告：`outputs/reports/all_heads/`
+- 报告内总表：`summary.csv`
+- 报告内均值方差：`summary_mean_std.csv`
+- 报告内图表：`figures/`
 - 训练日志：`logs/{head}_b{num_blocks}_seed{seed}/train.log`
