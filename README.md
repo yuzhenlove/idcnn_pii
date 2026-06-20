@@ -149,6 +149,64 @@ uv run python scripts/plot_results.py \
   --tag all_heads
 ```
 
+## NAS-IDCNN 多目标架构搜索
+
+NAS 搜索使用 CascadePointer，只在 Train/Dev 上训练和选择架构。优化目标是
+Dev 实体级 Micro-F1 最大化与长度128前向 FLOPs 最小化。每个候选固定
+`seed=42`；初始种群不计入代数。
+
+三个实验分别为：
+
+- 实验1：固定 Conv、`k=3`、`d=[1,2,4]`，搜索宽度、ratio 和 Cell 数；
+- 实验2：固定 Conv，搜索宽度、ratio、Cell 数、kernel 和 dilation；
+- 实验3：搜索全部变量，包括 Conv、DWConv、SepConv 和 Identity。
+
+先检查将要启动的10个初始候选，不执行训练：
+
+```bash
+uv run python scripts/run_nas_search.py \
+  --experiment 3 \
+  --generations 5 \
+  --dry-run
+```
+
+先跑实验3的5代流程验证。该命令评估10个初始个体，再运行5代，每代10个：
+
+```bash
+uv run python scripts/run_nas_search.py \
+  --experiment 3 \
+  --generations 5 \
+  --population-size 10 \
+  --workers 10
+```
+
+正式按 `3 → 1 → 2` 顺序运行三个实验，每个实验50代：
+
+```bash
+uv run python scripts/run_nas_search.py \
+  --experiment all \
+  --generations 50 \
+  --population-size 10 \
+  --workers 10
+```
+
+搜索状态保存在 `outputs/nas/experiment_{1,2,3}/search_state.json`。相同命令
+会从已完成代数继续运行；已评估的规范化重复架构直接复用结果。
+
+全部搜索完成后，才使用 Test 集评估最终 Pareto 解集：
+
+```bash
+uv run python scripts/evaluate_nas_pareto.py --experiment all
+```
+
+主要输出：
+
+- 候选结果：`outputs/nas/experiment_N/candidates/`
+- 每代记录：`outputs/nas/experiment_N/generations/`
+- Archive：`outputs/nas/experiment_N/archive.json`
+- Dev Pareto：`outputs/nas/experiment_N/pareto.csv`
+- 最终 Test：`outputs/nas/experiment_N/pareto_test.csv`
+
 ## 输出位置
 
 - 单次实验目录：`outputs/{head}_b{num_blocks}_seed{seed}/`
