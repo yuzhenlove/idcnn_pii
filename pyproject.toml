@@ -12,6 +12,8 @@ dependencies = [
     "pandas",
     "scikit-learn",
     "matplotlib>=3.10.9",
+    "onnx>=1.22.0",
+    "onnxruntime>=1.24.3",
 ]
 
 [tool.uv]
