@@ -69,16 +69,15 @@
 
 目标机器是 5 张 RTX 5090（每张 32 GB），计划每代 10 个候选按每张卡 2 个进程运行。
 
-目前 `scripts/run_nas_search.py` 的 `--workers 10` 只限制并发进程数，并不会自动把任务分配到不同 GPU；所有子进程默认会看到全部 GPU，并通常使用逻辑 GPU 0。因此下一步应先实现并验证多 GPU 调度：
+`scripts/run_nas_search.py` 已增加多 GPU 候选调度：
 
-1. 给搜索入口增加 GPU 列表参数，例如 `--gpus 0,1,2,3,4`；
-2. 以轮询方式将 10 个候选分配为 `0,1,2,3,4,0,1,2,3,4`；
-3. 启动每个候选子进程时设置独立的 `CUDA_VISIBLE_DEVICES`；
-4. 保持 `--workers 10`，实现每张物理 GPU 同时运行 2 个候选；
-5. 增加测试，确认任务分配、环境变量、缓存和断点续跑不受影响；
-6. 先做 dry-run 和极小训练验证，再运行实验3的 5 代流程。
+1. 使用 `--gpus 0,1,2,3,4` 指定物理 GPU；
+2. 使用 `--workers-per-gpu 2` 为每张卡创建两个候选槽位；
+3. 10 个候选按 `0,1,2,3,4,0,1,2,3,4` 分配；
+4. 每个候选子进程设置独立的 `CUDA_VISIBLE_DEVICES`；
+5. `--workers 10` 继续作为全局并发上限。
 
-修改应尽量集中在 `scripts/run_nas_search.py` 和 `tests/test_nas_search.py`，除非测试证明必须改动其他文件。
+正式搜索前仍应先做 dry-run 和极小训练验证，再运行实验3的 5 代流程。
 
 ## 新机器启动前检查
 
@@ -103,7 +102,9 @@ uv run python -c "import torch; print(torch.__version__); print(torch.version.cu
 uv run python -m unittest discover -s tests
 ```
 
-当前 uv 环境使用 PyTorch `2.12.0+cu130`。无卡模式下 `torch.cuda.is_available()` 为 `False` 属正常现象；挂载 GPU 后必须重新检查。
+当前 uv 环境使用 PyTorch `2.11.0+cu128`，与目标机器的 NVIDIA 570.124.04
+驱动兼容。无卡模式下 `torch.cuda.is_available()` 为 `False` 属正常现象；
+挂载 GPU 后必须重新检查。
 
 ## 现有运行命令与产物
 
@@ -123,10 +124,12 @@ uv run python scripts/run_nas_search.py \
   --experiment 3 \
   --generations 5 \
   --population-size 10 \
-  --workers 10
+  --workers 10 \
+  --gpus 0,1,2,3,4 \
+  --workers-per-gpu 2
 ```
 
-完成五卡调度后，应在上述命令中加入对应 GPU 参数。
+该命令会从已有 `search_state.json` 和候选缓存继续运行，不覆盖已完成候选。
 
 主要产物位于：
 

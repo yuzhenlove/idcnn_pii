@@ -177,7 +177,9 @@ uv run python scripts/run_nas_search.py \
   --experiment 3 \
   --generations 5 \
   --population-size 10 \
-  --workers 10
+  --workers 10 \
+  --gpus 0,1,2,3,4 \
+  --workers-per-gpu 2
 ```
 
 正式按 `3 → 1 → 2` 顺序运行三个实验，每个实验50代：
@@ -187,11 +189,18 @@ uv run python scripts/run_nas_search.py \
   --experiment all \
   --generations 50 \
   --population-size 10 \
-  --workers 10
+  --workers 10 \
+  --gpus 0,1,2,3,4 \
+  --workers-per-gpu 2
 ```
 
 搜索状态保存在 `outputs/nas/experiment_{1,2,3}/search_state.json`。相同命令
 会从已完成代数继续运行；已评估的规范化重复架构直接复用结果。
+
+多 GPU 模式会为每张物理 GPU 创建指定数量的候选槽位，并为每个候选子进程
+单独设置 `CUDA_VISIBLE_DEVICES`。上述配置按
+`0,1,2,3,4,0,1,2,3,4` 分配首批10个候选，每个子进程内部只看到逻辑
+`cuda:0`。`--workers` 仍控制全局并发上限。
 
 全部搜索完成后，才使用 Test 集评估最终 Pareto 解集：
 

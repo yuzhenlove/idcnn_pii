@@ -2,6 +2,7 @@ import argparse
 import ast
 import csv
 import json
+import os
 import random
 import subprocess
 import sys
@@ -24,6 +25,15 @@ def search_budget(population_size: int, generations: int) -> int:
 
 def individual_argument(individual) -> str:
     return ",".join(str(value) for value in individual)
+
+
+def parse_gpu_list(value: str) -> tuple[str, ...]:
+    gpus = tuple(item.strip() for item in value.split(",") if item.strip())
+    if not gpus:
+        raise ValueError("GPU list must not be empty")
+    if len(set(gpus)) != len(gpus):
+        raise ValueError("GPU list must not contain duplicates")
+    return gpus
 
 
 def build_candidate_command(
@@ -131,31 +141,55 @@ def load_cached_results(
     return cached, missing
 
 
-def run_parallel_jobs(jobs: list[tuple[list[str], Path]], workers: int, status_interval: int) -> None:
+def run_parallel_jobs(
+    jobs: list[tuple[list[str], Path]],
+    workers: int,
+    status_interval: int,
+    gpus: tuple[str, ...] | None = None,
+    workers_per_gpu: int = 1,
+) -> None:
     pending = list(jobs)
     active = []
+    available_gpu_slots = list(gpus) * workers_per_gpu if gpus is not None else []
     completed = 0
     started = time.time()
     last_status = started
     while pending or active:
-        while pending and len(active) < workers:
+        while (
+            pending
+            and len(active) < workers
+            and (gpus is None or available_gpu_slots)
+        ):
             command, output_dir = pending.pop(0)
+            gpu_id = available_gpu_slots.pop(0) if gpus is not None else None
             output_dir.mkdir(parents=True, exist_ok=True)
             log_file = open(output_dir / "process.log", "w", encoding="utf-8")
+            process_env = None
+            if gpu_id is not None:
+                process_env = os.environ.copy()
+                process_env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+                process_env["CUDA_VISIBLE_DEVICES"] = gpu_id
+                print(
+                    f"launch candidate={output_dir.name} gpu={gpu_id}",
+                    flush=True,
+                )
             process = subprocess.Popen(
                 command,
                 cwd=ROOT,
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
+                **({"env": process_env} if process_env is not None else {}),
             )
-            active.append((process, log_file, command))
+            active.append((process, log_file, command, gpu_id))
         for item in list(active):
-            process, log_file, command = item
+            process, log_file, command, gpu_id = item
             return_code = process.poll()
             if return_code is None:
                 continue
             log_file.close()
             active.remove(item)
+            if gpu_id is not None:
+                available_gpu_slots.append(gpu_id)
             completed += 1
             if return_code != 0:
                 raise subprocess.CalledProcessError(return_code, command)
@@ -185,6 +219,8 @@ def evaluate_population(
     epochs: int | None,
     batch_size: int | None,
     cpu: bool,
+    gpus: tuple[str, ...] | None = None,
+    workers_per_gpu: int = 1,
 ) -> list[dict]:
     cached, missing = load_cached_results(individuals, candidates_dir, experiment)
     jobs = []
@@ -204,7 +240,13 @@ def evaluate_population(
         jobs.append((command, output_dir))
         print(" ".join(command), flush=True)
     if jobs:
-        run_parallel_jobs(jobs, workers, status_interval)
+        run_parallel_jobs(
+            jobs,
+            workers,
+            status_interval,
+            gpus=gpus,
+            workers_per_gpu=workers_per_gpu,
+        )
     completed, still_missing = load_cached_results(individuals, candidates_dir, experiment)
     if still_missing:
         raise RuntimeError(f"candidate results missing after evaluation: {still_missing}")
@@ -283,20 +325,25 @@ def run_search(args, experiment: int) -> list[dict]:
             rng,
         )
         if args.dry_run:
-            for individual in population_individuals:
+            gpu_slots = list(args.gpus) * args.workers_per_gpu if args.gpus else []
+            for index, individual in enumerate(population_individuals):
                 key = individual_key(individual, experiment)
-                print(
-                    " ".join(
-                        build_candidate_command(
-                            individual,
-                            experiment,
-                            candidates_dir / key,
-                            epochs=args.epochs,
-                            batch_size=args.batch_size,
-                            cpu=args.cpu,
-                        )
+                command = " ".join(
+                    build_candidate_command(
+                        individual,
+                        experiment,
+                        candidates_dir / key,
+                        epochs=args.epochs,
+                        batch_size=args.batch_size,
+                        cpu=args.cpu,
                     )
                 )
+                if gpu_slots:
+                    command = (
+                        f"CUDA_VISIBLE_DEVICES={gpu_slots[index % len(gpu_slots)]} "
+                        f"{command}"
+                    )
+                print(command)
             return []
         population = evaluate_population(
             population_individuals,
@@ -308,6 +355,8 @@ def run_search(args, experiment: int) -> list[dict]:
             epochs=args.epochs,
             batch_size=args.batch_size,
             cpu=args.cpu,
+            gpus=args.gpus,
+            workers_per_gpu=args.workers_per_gpu,
         )
         archive = update_archive([], population, experiment, capacity=30, top_k=3)
         all_results = {row["candidate_id"]: row for row in population}
@@ -345,6 +394,8 @@ def run_search(args, experiment: int) -> list[dict]:
             args.epochs,
             args.batch_size,
             args.cpu,
+            args.gpus,
+            args.workers_per_gpu,
         )
         for row in offspring:
             all_results[row["candidate_id"]] = row
@@ -410,6 +461,8 @@ def parse_args():
     parser.add_argument("--generations", type=int, default=50)
     parser.add_argument("--population-size", type=int, default=10)
     parser.add_argument("--workers", type=int, default=10)
+    parser.add_argument("--gpus", type=parse_gpu_list)
+    parser.add_argument("--workers-per-gpu", type=int, default=1)
     parser.add_argument("--search-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--batch-size", type=int)
@@ -417,7 +470,12 @@ def parse_args():
     parser.add_argument("--cpu", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--force", action="store_true")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.workers_per_gpu < 1:
+        parser.error("--workers-per-gpu must be at least 1")
+    if args.cpu and args.gpus:
+        parser.error("--cpu and --gpus cannot be used together")
+    return args
 
 
 def main() -> None:
