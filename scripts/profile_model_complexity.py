@@ -17,7 +17,12 @@ from heads import CascadePointerHead, EfficientGlobalPointerHead
 from train import build_model
 
 
-TEST_TEXT = "经理您好，我是冯璐（工号EMP-5813-CV），因感冒发烧无法到岗，申请病假一天，已邮件请假。手机18659482211畅通。"
+TEST_TEXT = (
+    "兹授权本公司员工吴雪梅（身份证尾号：6821，工号：ACC-9044）全权处理与迪摩网络实业集团的"
+    "对账事宜，包括但不限于签署对账单、确认应收账款等。授权期限至2025年12月31日。公司地址："
+    "巢湖市经济开发区趋势网络有限公司办公楼68F。本授权书一式两份。"
+)
+assert len(TEST_TEXT) == 128
 
 
 def checkpoint_display_path(path: Path) -> str:

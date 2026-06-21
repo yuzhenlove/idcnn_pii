@@ -202,6 +202,12 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--warmup", type=int, default=20)
     parser.add_argument("--iterations", type=int, default=100)
+    parser.add_argument("--onnx-dir", type=Path, default=ROOT / "outputs" / "onnx_128")
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=ROOT / "outputs" / "reports" / "model_complexity_128_onnx.csv",
+    )
     args = parser.parse_args()
 
     torch.set_num_threads(1)
@@ -210,10 +216,9 @@ def main() -> None:
     if len(checkpoints) != 48:
         raise RuntimeError(f"expected 48 checkpoints, found {len(checkpoints)}")
 
-    onnx_dir = ROOT / "outputs" / "onnx"
     rows = []
     for index, path in enumerate(checkpoints, 1):
-        row = profile_checkpoint(path, onnx_dir, args.warmup, args.iterations)
+        row = profile_checkpoint(path, args.onnx_dir, args.warmup, args.iterations)
         rows.append(row)
         print(
             f"[{index:02d}/48] {row['run_id']} "
@@ -221,13 +226,12 @@ def main() -> None:
             f"complete={row['complete_mean_latency_ms']:.3f} ms"
         )
 
-    output_path = ROOT / "outputs" / "reports" / "model_complexity_64_onnx.csv"
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, "w", encoding="utf-8", newline="") as file:
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with open(args.output, "w", encoding="utf-8", newline="") as file:
         writer = csv.DictWriter(file, fieldnames=rows[0].keys())
         writer.writeheader()
         writer.writerows(rows)
-    print(f"wrote {len(rows)} rows to {output_path}")
+    print(f"wrote {len(rows)} rows to {args.output}")
 
 
 if __name__ == "__main__":

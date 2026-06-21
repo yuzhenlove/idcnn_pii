@@ -13,8 +13,8 @@ from scripts.profile_model_complexity import TEST_TEXT, checkpoint_display_path,
 
 
 class ProfileModelComplexityTest(unittest.TestCase):
-    def test_fixed_text_has_64_character_tokens(self):
-        self.assertEqual(len(TEST_TEXT), 64)
+    def test_fixed_text_has_128_character_tokens(self):
+        self.assertEqual(len(TEST_TEXT), 128)
 
     def test_counts_conv_and_linear_macs(self):
         model = nn.Sequential(
